@@ -1,0 +1,8 @@
+<!-- strings.xml -->
+<resources>
+    <string name="app_name">Worker Process Manager</string>
+    <string name="create_worker">Create Worker</string>
+    <string name="destroy_worker">Destroy Worker</string>
+    <string name="pause_worker">Pause Worker</string>
+    <string name="resume_worker">Resume Worker</string>
+</resources>
