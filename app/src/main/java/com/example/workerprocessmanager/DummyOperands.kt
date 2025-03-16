@@ -2,7 +2,7 @@ package com.example.workerprocessmanager
 
 class DummyOperands {
     // matrix 100x100 A,B,C Dst:D
-    val matrixSize = 100
+    val matrixSize = 1000
     public var matrixA = Array(matrixSize) { DoubleArray(matrixSize) }
     public var matrixB = Array(matrixSize) { DoubleArray(matrixSize) }
     public var matrixC = Array(matrixSize) { DoubleArray(matrixSize) }

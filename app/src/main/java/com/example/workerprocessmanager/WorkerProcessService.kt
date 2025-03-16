@@ -25,7 +25,7 @@ import android.os.Process
 class WorkerProcessService : Service() {
     private var isRunning = false
     private var isPaused = false
-    private lateinit var logToFile: LogToFile
+
     /*
     private var periodicCheckUtilizationHandler: Handler = Handler(Looper.getMainLooper())
     private val periodicCheckUtilization: Runnable = object : Runnable {
@@ -35,7 +35,8 @@ class WorkerProcessService : Service() {
         }
     }*/
 
-    private lateinit var worker: WorkerThread_
+
+
 
     companion object {
         private const val TAG = "WorkerProcessService"
@@ -43,7 +44,45 @@ class WorkerProcessService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val AUTO_RESPAWN_INTERVAL = 60000L // 1 minute
         public const val WORKER_INFORM_PID = 2
-        public val mainHandler: Handler = Handler(Looper.getMainLooper())
+        private lateinit var cpuMonitor: CpuUsageMonitor
+        private lateinit var worker: WorkerThread_
+        public lateinit var logToFile: LogToFile
+        // override the HandleMessage method of the Handler class
+        public val mainHandler: Handler = Handler(Looper.getMainLooper()) { msg ->
+            when (msg.what) {
+                WORKER_INFORM_PID -> {
+                    Log.d(TAG, "Get thread PID: ${msg.arg1} from worker.")
+
+                    cpuMonitor.startMonitoring(10000, object : CpuUsageMonitor.CpuUsageListener {
+                        override fun onUsageUpdated(usagePercent: Float) {
+                            if (usagePercent < 0.4) {
+                                // send a message lower priority
+                                val timestamp = System.currentTimeMillis()
+                                Log.d(TAG, "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent")
+                                logToFile.logToFile(TAG, "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent")
+                                val incMsg: Message = Message.obtain()
+                                incMsg.what = WorkerHandler.MSG_RAISE_PRIORITY
+                                WorkerProcessService.mainHandler.sendMessage(incMsg)
+                            }
+                            else if (usagePercent > 0.6) {
+                                // send a message raise priority
+                                val timestamp = System.currentTimeMillis()
+                                Log.d(TAG, "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent")
+                                logToFile.logToFile(TAG, "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent")
+                                val decMsg: Message = Message.obtain()
+                                decMsg.what = WorkerHandler.MSG_LOWER_PRIORITY
+                                WorkerProcessService.mainHandler.sendMessage(decMsg)
+                            }
+                            else {
+                                Log.d(TAG, "[RECORD] Probe CPU usage is normal: $usagePercent")
+                            }
+                        }
+                    })
+                    true
+                }
+                else -> false
+            }
+        }
     }
 
     private val binder = object : IWorkerProcess.Stub() {
@@ -74,6 +113,7 @@ class WorkerProcessService : Service() {
         createNotificationChannel()
         setupAutoRespawn()
         worker = WorkerThread_()
+        cpuMonitor = CpuUsageMonitor()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -182,7 +222,9 @@ class WorkerProcessService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy called")
         logToFile.logToFile(TAG, "onDestroy called")
+        cpuMonitor.stopMonitoring()
         super.onDestroy()
+
     }
 }
 
@@ -210,7 +252,7 @@ private class WorkerThread_ : HandlerThread("WorkerThread") {
         super.onLooperPrepared()
         handler = WorkerHandler(looper)
         Log.d(TAG, "Worker thread looper prepared")
-        //sendTidToMainThread()
+        sendTidToMainThread()
         handler.post(workRunnable)
     }
 
@@ -223,6 +265,7 @@ private class WorkerThread_ : HandlerThread("WorkerThread") {
 
     fun dummyWorkload() {
         Log.d(TAG, "Dummy started")
+        WorkerProcessService.logToFile.logToFile(TAG, "${System.currentTimeMillis()} Dummy started")
         val matrixSize = 1000
         for (i in 0 until matrixSize) {
             for (j in 0 until matrixSize) {
@@ -233,6 +276,7 @@ private class WorkerThread_ : HandlerThread("WorkerThread") {
             }
         }
         Log.d(TAG, "Dummy finished")
+        WorkerProcessService.logToFile.logToFile(TAG, "${System.currentTimeMillis()} Dummy finished")
     }
 
     fun sendTidToMainThread() {
@@ -248,37 +292,6 @@ private class WorkerThread_ : HandlerThread("WorkerThread") {
 }
 
 
-// A thread extends normal thread equivalent to WorkerThread_
-
-private class WorkerThread__ : Thread() {
-
-    companion object{
-        private val TAG = "WorkerThread"
-    }
-
-    private val dummyOperands = DummyOperands()
-
-    override fun run() {
-        Log.d(TAG, "Worker thread started")
-        dummyWorkload()
-        Log.d(TAG, "Worker thread finished")
-    }
-
-    fun dummyWorkload() {
-        Log.d(TAG, "Dummy started")
-        val matrixSize = 100
-        for (i in 0 until matrixSize) {
-            for (j in 0 until matrixSize) {
-                for (k in 0 until matrixSize) {
-                    // Multiply matrices A and B and store the result in matrix C
-                    dummyOperands.matrixD[i][j] = dummyOperands.matrixC[i][j] + dummyOperands.matrixA[i][k] * dummyOperands.matrixB[k][j]
-                }
-            }
-        }
-        Log.d(TAG, "Dummy finished")
-    }
-
-}
 
 
 private class WorkerHandler internal constructor(
@@ -286,9 +299,13 @@ private class WorkerHandler internal constructor(
 ) :
     Handler(looper!!) {
 
-    private final val MSG_LOWER_PRIORITY = 0
-    private final val MSG_RAISE_PRIORITY = 1
-    private final val TAG = "A4A_Worker"
+
+        companion object{
+            public final val MSG_LOWER_PRIORITY = 0
+            public final val MSG_RAISE_PRIORITY = 1
+            private final val TAG = "A4A_Worker"
+        }
+
 
     private val dummyOperands = DummyOperands()
 
@@ -296,11 +313,19 @@ private class WorkerHandler internal constructor(
         when (msg.what) {
             MSG_LOWER_PRIORITY -> {
                 Log.d(TAG, "Lowering worker thread priority")
-                Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND)
+                WorkerProcessService.logToFile.logToFile(TAG, "Lowering worker thread priority")
+                // lower the value of priority by 1 but larger than 0
+                val currentPriority = Process.getThreadPriority(Process.myTid())
+                val newPriority = (currentPriority + 1).coerceAtMost(Process.THREAD_PRIORITY_LOWEST)
+                Process.setThreadPriority(newPriority)
             }
             MSG_RAISE_PRIORITY -> {
                 Log.d(TAG, "Raising worker thread priority")
-                Process.setThreadPriority(Process.THREAD_PRIORITY_DEFAULT)
+                WorkerProcessService.logToFile.logToFile(TAG, "Raising worker thread priority")
+                // raise the value of priority by 1 but smaller than 0
+                val currentPriority = Process.getThreadPriority(Process.myTid())
+                val newPriority = (currentPriority - 1).coerceAtLeast(Process.THREAD_PRIORITY_FOREGROUND)
+                Process.setThreadPriority(newPriority)
             }
             else -> super.handleMessage(msg)
         }
