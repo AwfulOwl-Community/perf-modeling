@@ -26,17 +26,56 @@ class WorkerProcessService : Service() {
     private var isRunning = false
     private var isPaused = false
 
-    /*
-    private var periodicCheckUtilizationHandler: Handler = Handler(Looper.getMainLooper())
-    private val periodicCheckUtilization: Runnable = object : Runnable {
-        override fun run() {
-            Log.d(TAG, "Dummy Check")
-            periodicCheckUtilizationHandler.postDelayed(this, 10000) // schedule itself
+
+
+    init {
+        periodicCheckUtilization = object : Runnable {
+            override fun run() {
+                /*
+                var usagePercent = cpuMonitor.getCpuUsage();
+                if (usagePercent < 0.3) {
+                    // send a message lower priority
+                    val timestamp = System.currentTimeMillis()
+                    Log.d(
+                        TAG,
+                        "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent"
+                    )
+                    logToFile.logToFile(
+                        TAG,
+                        "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent"
+                    )
+                    val incMsg: Message = Message.obtain()
+                    incMsg.what = WorkerHandler.MSG_RAISE_PRIORITY
+                    worker.handler.sendMessage(incMsg)
+                } else if (usagePercent > 0.5) {
+                    // send a message raise priority
+                    val timestamp = System.currentTimeMillis()
+                    Log.d(
+                        TAG,
+                        "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent"
+                    )
+                    logToFile.logToFile(
+                        TAG,
+                        "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent"
+                    )
+                    val decMsg: Message = Message.obtain()
+                    decMsg.what = WorkerHandler.MSG_LOWER_PRIORITY
+                    worker.handler.sendMessage(decMsg)
+                } else {
+                    Log.d(TAG, "[RECORD] Probe CPU usage is normal: $usagePercent")
+                }
+                 */
+                // Log CPU usage
+                cpuTracer.logAllUsage()
+                periodicCheckUtilizationHandler.postDelayed(
+                    periodicCheckUtilization,
+                    10000
+                ) // schedule itself
+            }
         }
-    }*/
+    }
 
-
-
+    public lateinit var cpuTracer: CpuUsageTracer
 
     companion object {
         private const val TAG = "WorkerProcessService"
@@ -47,42 +86,23 @@ class WorkerProcessService : Service() {
         private lateinit var cpuMonitor: CpuUsageMonitor
         private lateinit var worker: WorkerThread_
         public lateinit var logToFile: LogToFile
+
         // override the HandleMessage method of the Handler class
         public val mainHandler: Handler = Handler(Looper.getMainLooper()) { msg ->
             when (msg.what) {
                 WORKER_INFORM_PID -> {
                     Log.d(TAG, "Get thread PID: ${msg.arg1} from worker.")
-
-                    cpuMonitor.startMonitoring(10000, object : CpuUsageMonitor.CpuUsageListener {
-                        override fun onUsageUpdated(usagePercent: Float) {
-                            if (usagePercent < 0.4) {
-                                // send a message lower priority
-                                val timestamp = System.currentTimeMillis()
-                                Log.d(TAG, "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent")
-                                logToFile.logToFile(TAG, "${timestamp} [RECORD] Probe CPU usage is low: $usagePercent")
-                                val incMsg: Message = Message.obtain()
-                                incMsg.what = WorkerHandler.MSG_RAISE_PRIORITY
-                                WorkerProcessService.mainHandler.sendMessage(incMsg)
-                            }
-                            else if (usagePercent > 0.6) {
-                                // send a message raise priority
-                                val timestamp = System.currentTimeMillis()
-                                Log.d(TAG, "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent")
-                                logToFile.logToFile(TAG, "${timestamp} [RECORD] Probe CPU usage is high: $usagePercent")
-                                val decMsg: Message = Message.obtain()
-                                decMsg.what = WorkerHandler.MSG_LOWER_PRIORITY
-                                WorkerProcessService.mainHandler.sendMessage(decMsg)
-                            }
-                            else {
-                                Log.d(TAG, "[RECORD] Probe CPU usage is normal: $usagePercent")
-                            }
-                        }
-                    })
+                    logToFile.logToFile(TAG, "Get thread PID: ${msg.arg1} from worker.")
+                    // issue the periodic check utilization
+                    periodicCheckUtilizationHandler.post(periodicCheckUtilization)
                     true
                 }
                 else -> false
             }
         }
+
+        private var periodicCheckUtilizationHandler: Handler = Handler(Looper.getMainLooper())
+        private lateinit var periodicCheckUtilization: Runnable
     }
 
     private val binder = object : IWorkerProcess.Stub() {
@@ -112,22 +132,25 @@ class WorkerProcessService : Service() {
         logToFile.logToFile(TAG, "onCreate called")
         createNotificationChannel()
         setupAutoRespawn()
-        worker = WorkerThread_()
-        cpuMonitor = CpuUsageMonitor()
+        // worker = WorkerThread_() OPEN WORKER HERE
+        //cpuMonitor = CpuUsageMonitor()
+        cpuTracer = CpuUsageTracer.getInstance(this)!!
+        cpuTracer.logCPUInfo()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         Log.d(TAG, "onStartCommand called with startId: $startId")
         logToFile.logToFile(TAG, "onStartCommand called with startId: $startId")
         startForeground(NOTIFICATION_ID, createNotification())
-        if(!worker.isAlive){
+
+        /* if(!worker.isAlive){ OPEN WORKER HERE
             worker.start()
         }
         else{
             Log.d(TAG, "Worker thread is already running")
             logToFile.logToFile(TAG, "Worker thread is already running")
-        }
-        //periodicCheckUtilizationHandler.postDelayed(periodicCheckUtilization, 10000)
+        } */
+        periodicCheckUtilizationHandler.postDelayed(periodicCheckUtilization, 10000) // IF WORKER OPEN, COMMENT THIS.
         return START_STICKY
     }
 
@@ -222,7 +245,7 @@ class WorkerProcessService : Service() {
     override fun onDestroy() {
         Log.d(TAG, "onDestroy called")
         logToFile.logToFile(TAG, "onDestroy called")
-        cpuMonitor.stopMonitoring()
+        //cpuMonitor.stopMonitoring()
         super.onDestroy()
 
     }
@@ -234,7 +257,7 @@ private class WorkerThread_ : HandlerThread("WorkerThread") {
     companion object{
         private val TAG = "WorkerThread"
     }
-    private lateinit var handler: Handler
+    public lateinit var handler: Handler
 
     private val dummyOperands = DummyOperands()
     private lateinit var workRunnable: Runnable

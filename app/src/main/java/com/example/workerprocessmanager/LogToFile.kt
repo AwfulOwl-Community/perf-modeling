@@ -25,6 +25,7 @@ class LogToFile(private val context: Context) {
 
 import android.content.Context
 import android.os.Environment
+import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -46,6 +47,7 @@ class LogToFile(private val context: Context) {
             FileOutputStream(file, true).use { outputStream ->
                 outputStream.write(logMessage.toByteArray())
             }
+            Log.d("LogToFile", "Log written to $file")
         } catch (e: IOException) {
             e.printStackTrace()
         }
